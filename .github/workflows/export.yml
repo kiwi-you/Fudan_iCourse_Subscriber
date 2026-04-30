@@ -67,15 +67,32 @@ jobs:
 
       - name: Decrypt database
         env:
-          DB_KEY: ${{ secrets.STUID }}${{ secrets.UISPSW }}${{ secrets.DASHSCOPE_API_KEY }}${{ secrets.SMTP_PASSWORD }}
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          if [ -f data/icourse.db.gz.enc ]; then
+          NEW_KEY=$(printf '%s' "ICSv2:${STUID}:${UISPSW}" | sha256sum | cut -d' ' -f1)
+          LEGACY_KEY="${STUID}${UISPSW}${DASHSCOPE_API_KEY}${SMTP_PASSWORD}"
+
+          decrypt_blob() {
+            local in_path="$1"
+            local out_path="$2"
+            if openssl enc -aes-256-cbc -d -pbkdf2 -iter 100000 \
+                 -in "$in_path" -out "$out_path" \
+                 -pass pass:"$NEW_KEY" 2>/dev/null; then
+              return 0
+            fi
             openssl enc -aes-256-cbc -d -pbkdf2 \
-              -in data/icourse.db.gz.enc -out data/icourse.db.gz -pass env:DB_KEY
+              -in "$in_path" -out "$out_path" \
+              -pass pass:"$LEGACY_KEY" 2>/dev/null
+          }
+
+          if [ -f data/icourse.db.gz.enc ]; then
+            decrypt_blob data/icourse.db.gz.enc data/icourse.db.gz
             gzip -d data/icourse.db.gz
           else
-            openssl enc -aes-256-cbc -d -pbkdf2 \
-              -in data/icourse.db.enc -out data/icourse.db -pass env:DB_KEY
+            decrypt_blob data/icourse.db.enc data/icourse.db
           fi
           echo "Database decrypted."
 
