@@ -1,4 +1,5 @@
-"""Speech-to-text using ffmpeg + sherpa-onnx FireRed ASR2 CTC + silero VAD.
+"""Speech-to-text using ffmpeg + sherpa-onnx (SenseVoice / FireRed / Zipformer)
+with silero VAD.
 
 Two consumption modes share the same VAD/ASR core:
 
@@ -35,6 +36,64 @@ WINDOW_SIZE = 512  # VAD window in samples (~32 ms at 16 kHz)
 BYTES_PER_SAMPLE = 4  # float32
 BYTES_PER_SECOND = SAMPLE_RATE * BYTES_PER_SAMPLE
 SILENCE_GAP_THRESHOLD_SEC = 30 * 60  # 30 min of no speech → suspected cutoff
+
+
+# ── Generic per-segment text post-processing ─────────────────────────────
+# Applied to every recognized segment regardless of backend.  The cleanups
+# below address noise that the LLM otherwise has to spend tokens ignoring:
+#
+#   • SenseVoice's zh-en-ja-ko-yue model hallucinates kana / hangul tokens
+#     in pure-Chinese audio ("うん", "あの", "그래") because the model was
+#     trained to handle code-switching and biases toward emitting non-empty
+#     output even for filler sounds.
+#   • FireRed inserts ``<sil>`` between recognized chunks.
+#   • Both backends transcribe occasional bilingual filler English ("Yeah",
+#     "OK", "well") from bilingual classroom speech that adds nothing.
+#
+# What we do NOT touch: real technical English (CNN, FCN, YOLO, RGB, VGG…).
+# The English filter is a fixed whitelist of fillers, so tech terms survive
+# verbatim.  This is by design — anything subject-specific lives at the
+# prompt / LLM layer, not here.
+#
+# Module-level compiled patterns so we don't recompile per call.
+
+# Japanese hiragana + katakana + half-width katakana
+_JP_NOISE_RE = re.compile(r"[぀-ゟ゠-ヿｦ-ﾟ]+")
+# Korean: precomposed hangul syllables + jamo blocks
+_KR_NOISE_RE = re.compile(r"[가-힯ᄀ-ᇿ㄰-㆏]+")
+# English filler-word whitelist.  Word-bounded so tech terms survive.
+_EN_FILLER_RE = re.compile(
+    r"\b(?:yeah|yep|yup|ok|okay|uh+|um+|hmm+|ohh*|huh+|hey+|"
+    r"you know|i mean)\b",
+    re.IGNORECASE,
+)
+# Angle-bracket tokens emitted as literal text by some backends:
+#   <sil>          FireRed silence
+#   <|zh|>, <|EMO|>, <|HAPPY|>, <|Speech|> …  SenseVoice format tags
+#                  (sherpa-onnx usually strips these, but defense in depth)
+_BRACKET_TOK_RE = re.compile(r"<\|?[^<>]*\|?>")
+# Collapse the leftover whitespace (incl. ideographic full-width space U+3000)
+_WS_COLLAPSE_RE = re.compile(r"[ \t　]+")
+# After deletions, runs of dangling punctuation + whitespace pile up (e.g.
+# "P. Yeah. Yeah。" → "P. . 。" — the periods are orphans left by the
+# removed fillers).  Collapse 2+ adjacent punctuation/space chars to a
+# single full-width period so the LLM still sees ONE sentence break.
+_ORPHAN_PUNCT_RE = re.compile(r"[\s.。,，;；!！?？]{2,}")
+# Trim leading/trailing punctuation+whitespace on each segment — the inter-
+# segment join in ``_consume_pcm_stream`` already inserts a space, so any
+# punctuation at the edges is noise from a deletion at the boundary.
+_EDGE_PUNCT = " \t　.。,，;；!！?？"
+
+
+def _postprocess_segment(text: str) -> str:
+    """Strip cross-backend ASR noise from one recognized segment."""
+    text = _BRACKET_TOK_RE.sub("", text)
+    text = _JP_NOISE_RE.sub("", text)
+    text = _KR_NOISE_RE.sub("", text)
+    text = _EN_FILLER_RE.sub("", text)
+    text = _ORPHAN_PUNCT_RE.sub("。", text)
+    text = _WS_COLLAPSE_RE.sub(" ", text)
+    return text.strip(_EDGE_PUNCT)
 
 
 class Transcriber:
@@ -95,7 +154,18 @@ class Transcriber:
             )
         self._vad_config = sherpa_onnx.VadModelConfig()
         self._vad_config.silero_vad.model = vad_path
-        self._vad_config.silero_vad.min_silence_duration = 0.25
+        # VAD tuned to feed the recognizer longer chunks.  Past defaults
+        # (min_silence_duration=0.25) fragmented continuous lecturer speech
+        # at every breath, which both increased the per-segment ASR fixed
+        # cost AND gave SenseVoice less context to anchor language detection
+        # on (a leading "うん" hallucination is much more likely on a 2-second
+        # clip than on a 20-second one).  Values now:
+        #   min_silence_duration = 0.8   sec  — only end on a real pause
+        #   max_speech_duration  = 30.0  sec  — SenseVoice was trained on
+        #                                       up-to-30s windows; matches
+        #                                       its receptive field
+        self._vad_config.silero_vad.min_silence_duration = 0.8
+        self._vad_config.silero_vad.max_speech_duration = 30.0
         self._vad_config.sample_rate = SAMPLE_RATE
         self._reset_vad()
         print(f"[Transcriber] Model loaded (backend={backend}, "
@@ -185,7 +255,7 @@ class Transcriber:
             stream = self._recognizer.create_stream()
             stream.accept_waveform(SAMPLE_RATE, samples)
             self._recognizer.decode_stream(stream)
-            text = stream.result.text.strip()
+            text = _postprocess_segment(stream.result.text)
             if text:
                 start_ms = int(seg_start_samples / SAMPLE_RATE * 1000)
                 end_ms = int(

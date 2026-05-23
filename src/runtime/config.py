@@ -32,11 +32,7 @@ MODEL_PROVIDERS: list[dict] = [
         "default_base_url": "https://api-inference.modelscope.cn/v1/",
         "models": [
             "deepseek-ai/DeepSeek-V4-Pro",
-            "deepseek-ai/DeepSeek-V4-Flash",
-            "deepseek-ai/DeepSeek-V3.2",
-            "ZhipuAI/GLM-5",
-            "MiniMax/MiniMax-M2.5",
-            "Qwen/Qwen3.5-397B-A17B",
+            "deepseek-ai/DeepSeek-V4-Flash"
         ],
     },
     {
@@ -47,6 +43,18 @@ MODEL_PROVIDERS: list[dict] = [
         "models": [
             "deepseek-v4-pro",
             "deepseek-v4-flash",
+        ],
+    },
+    {
+        "name": "modelscope",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "base_url_env": "DASHSCOPE_BASE_URL",
+        "default_base_url": "https://api-inference.modelscope.cn/v1/",
+        "models": [
+            "deepseek-ai/DeepSeek-V3.2",
+            "ZhipuAI/GLM-5",
+            "MiniMax/MiniMax-M2.5",
+            "Qwen/Qwen3.5-397B-A17B",
         ],
     },
     {
@@ -118,14 +126,14 @@ VIDEO_DIR = os.path.join(DATA_DIR, "videos")
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")  # ffmpeg-decoded f32le scratch buffers
 DB_PATH = os.environ.get("DB_PATH", os.path.join(DATA_DIR, "icourse.db"))
 
-# Sherpa-onnx ASR model directory.  Default: FireRed ASR2 CTC (zh+en, int8).
+# Sherpa-onnx ASR model directory.  Default: SenseVoice (zh+en+ja+ko+yue, int8).
 # ASR_MODEL_DIR is the new name; SENSEVOICE_MODEL_DIR is the legacy env var
 # kept as a fallback so existing CI cache keys keep working.
 ASR_MODEL_DIR = os.environ.get(
     "ASR_MODEL_DIR",
     os.environ.get(
         "SENSEVOICE_MODEL_DIR",
-        "sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25",
+        "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
     ),
 )
 SENSEVOICE_MODEL_DIR = ASR_MODEL_DIR  # alias for any straggler imports
@@ -133,10 +141,10 @@ SILERO_VAD_PATH = os.environ.get("SILERO_VAD_PATH", "silero_vad.onnx")
 
 # ASR backend selector — Transcriber dispatches on this.  When changing,
 # ASR_MODEL_DIR must point at a matching sherpa-onnx model bundle:
-#   firered    — sherpa-onnx-fire-red-asr2-ctc-* (CTC, single model.onnx)
 #   sensevoice — sherpa-onnx-sense-voice-* (multi-lang CTC, single model)
+#   firered    — sherpa-onnx-fire-red-asr2-ctc-* (CTC, single model.onnx)
 #   zipformer  — sherpa-onnx-zipformer-* (transducer, encoder/decoder/joiner)
-ASR_BACKEND = os.environ.get("ASR_BACKEND", "firered").strip().lower()
+ASR_BACKEND = os.environ.get("ASR_BACKEND", "sensevoice").strip().lower()
 # Inference thread count.  4 fully saturates a 4-vCPU GitHub runner when
 # ASR is the only thing on the box.  When OCR overlaps, the Scheduler's
 # set_asr_active() caps OCR concurrency at OCR_MAX_TARGET_WHEN_ASR_ACTIVE

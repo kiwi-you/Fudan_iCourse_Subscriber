@@ -32,6 +32,9 @@ _run_logs/
 # Production-test script outputs (raw audio, intermediate JSON, etc.)
 test_prod_out/
 
+# Local decryption dumps (decrypted DB + per-lecture markdown)
+_decrypted_dump/
+
 docs/*
 !docs/*.png
 !docs/frontend-readme.md

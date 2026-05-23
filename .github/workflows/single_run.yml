@@ -46,16 +46,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25/
+            sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
             silero_vad.onnx
-          key: asr-models-fire-red-asr2-ctc-2026-02-25
+          key: asr-models-sense-voice-2024-07-17
 
       - name: Download ASR models
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
-          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25.tar.bz2
-          tar xf sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25.tar.bz2
-          rm sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25.tar.bz2
+          wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+          rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
           wget -q https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
 
       - name: Cache RapidOCR models
