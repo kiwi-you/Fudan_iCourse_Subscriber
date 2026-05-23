@@ -36,9 +36,9 @@ from html import escape
 # Allow importing from the project root when run as `python scripts/export_course.py`
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import config  # noqa: E402
-from src.database import Database  # noqa: E402
-from src.emailer import _EMAIL_CSS, _PYGMENTS_CSS, _md_to_html  # noqa: E402
+from src.runtime import config
+from src.data.database import Database  # noqa: E402
+from src.api.emailer import _EMAIL_CSS, _PYGMENTS_CSS, _md_to_html  # noqa: E402
 
 # Override hardcoded pixel dimensions for PDF rendering.
 # WeasyPrint maps CSS px to physical size at 96 DPI, which makes the

@@ -45,6 +45,22 @@ CREATE TABLE IF NOT EXISTS ppt_pages (
 );
 CREATE INDEX IF NOT EXISTS idx_ppt_pages_sub_status
     ON ppt_pages(sub_id, ocr_status);
+-- ``all_courses`` is the catalog of every course offered by the school in
+-- a given term, regardless of whether the user has subscribed to it.  Used
+-- by the frontend's subscription editor to render a searchable picker;
+-- separate from ``courses`` (which only holds subscribed courses with
+-- locally-cached lectures).
+CREATE TABLE IF NOT EXISTS all_courses (
+    course_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    title TEXT,
+    teacher TEXT,
+    dept TEXT,
+    last_seen_at TEXT,
+    PRIMARY KEY (course_id, term)
+);
+CREATE INDEX IF NOT EXISTS idx_all_courses_term
+    ON all_courses(term);
 """
 
 # Columns added to ``lectures`` after the v1 schema shipped.  Existing DBs

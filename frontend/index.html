@@ -26,7 +26,7 @@
 
   <!-- Left: back arrow or logo -->
   <div class="flex items-center gap-2 min-w-0">
-    <button x-show="['lectures','detail','settings'].includes(view)"
+    <button x-show="['lectures','detail','settings','subscriptions'].includes(view)"
             @click="goBack()" class="p-1 -ml-1 text-gray-600 hover:text-gray-900 flex-shrink-0">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
@@ -36,6 +36,7 @@
       view === 'lectures' ? currentCourse?.title :
       view === 'detail'   ? currentLecture?.sub_title :
       view === 'settings' ? 'Settings' :
+      view === 'subscriptions' ? '编辑订阅' :
       'iCourse'
     "></h1>
   </div>
@@ -62,6 +63,17 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
       </svg>
       Search
+    </button>
+    <button @click="openSubscriptions()"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+            :class="view === 'subscriptions'
+              ? 'bg-blue-50 text-blue-600'
+              : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M19 11H5m14-4H5m14 8H5m14 4H5"/>
+      </svg>
+      订阅
     </button>
     <button @click="openSettings()"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
@@ -102,7 +114,7 @@
 </header>
 
 <!-- Mobile bottom nav (hidden on desktop) -->
-<nav x-show="['courses','lectures','detail','search','settings'].includes(view)"
+<nav x-show="['courses','lectures','detail','search','settings','subscriptions'].includes(view)"
      class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 safe-bottom z-30">
   <div class="flex justify-around py-2">
     <button @click="_go('courses')" class="flex flex-col items-center gap-0.5 px-4 py-1"
@@ -119,6 +131,14 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
       </svg>
       <span class="text-[10px]">Search</span>
+    </button>
+    <button @click="openSubscriptions()" class="flex flex-col items-center gap-0.5 px-4 py-1"
+            :class="view === 'subscriptions' ? 'text-blue-600' : 'text-gray-400'">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M19 11H5m14-4H5m14 8H5m14 4H5"/>
+      </svg>
+      <span class="text-[10px]">订阅</span>
     </button>
     <button @click="openSettings()" class="flex flex-col items-center gap-0.5 px-4 py-1"
             :class="view === 'settings' ? 'text-blue-600' : 'text-gray-400'">
@@ -255,9 +275,17 @@
         <button @click="openCourse(c.course_id)"
                 class="w-full text-left bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow active:bg-gray-50">
           <div class="flex items-start justify-between gap-3">
-            <div class="min-w-0">
-              <h3 class="font-semibold text-gray-800 truncate" x-text="c.title"></h3>
-              <p class="text-sm text-gray-500 mt-0.5" x-text="c.teacher"></p>
+            <div class="min-w-0 flex items-start gap-2">
+              <button @click.stop="toggleStar(c.course_id)"
+                      class="flex-shrink-0 mt-0.5 text-lg leading-none"
+                      :class="isStarred(c.course_id) ? 'text-amber-400' : 'text-gray-300 hover:text-amber-400'"
+                      :title="isStarred(c.course_id) ? '取消置顶' : '置顶'">
+                <span x-text="isStarred(c.course_id) ? '★' : '☆'"></span>
+              </button>
+              <div class="min-w-0">
+                <h3 class="font-semibold text-gray-800 truncate" x-text="c.title"></h3>
+                <p class="text-sm text-gray-500 mt-0.5" x-text="c.teacher"></p>
+              </div>
             </div>
             <div class="flex flex-col items-end flex-shrink-0">
               <span class="text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full"
@@ -348,6 +376,27 @@
           </template>
         </div>
 
+        <!-- Prev / next lecture nav (foot of detail view).  Wraps within the
+             current course's lecture list, in the same order the lectures
+             page renders.  Hidden on the only/last/first lecture as
+             appropriate; respects sub_id ordering. -->
+        <nav class="mt-8 pt-4 border-t border-gray-100 flex items-stretch gap-2 text-sm">
+          <button @click="gotoPrevLecture()"
+                  :disabled="!prevLecture()"
+                  class="flex-1 text-left px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent">
+            <div class="text-xs text-gray-400">← 上一节</div>
+            <div class="truncate text-gray-700"
+                 x-text="prevLecture()?.sub_title || '（无）'"></div>
+          </button>
+          <button @click="gotoNextLecture()"
+                  :disabled="!nextLecture()"
+                  class="flex-1 text-right px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent">
+            <div class="text-xs text-gray-400">下一节 →</div>
+            <div class="truncate text-gray-700"
+                 x-text="nextLecture()?.sub_title || '（无）'"></div>
+          </button>
+        </nav>
+
         <!-- Mobile cycle button (FAB-style) -->
         <button x-show="currentLecture"
                 @click="cycleDetailView()"
@@ -377,12 +426,102 @@
       <template x-for="r in searchResults" :key="r.sub_id">
         <button @click="openLecture(r.sub_id)"
                 class="w-full text-left bg-white rounded-lg border border-gray-100 p-3 hover:shadow-md transition-shadow active:bg-gray-50">
-          <p class="text-xs text-blue-600 font-medium" x-text="r.course_title"></p>
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-xs text-blue-600 font-medium truncate" x-text="r.course_title"></p>
+            <span class="text-[10px] uppercase tracking-wide text-gray-400 flex-shrink-0"
+                  x-text="r.hit_field === 'transcript' ? '转录命中'
+                        : r.hit_field === 'sub_title'  ? '标题命中'
+                        : '摘要命中'"></span>
+          </div>
           <h4 class="font-medium text-gray-800 text-sm mt-0.5" x-text="r.sub_title || 'Untitled'"></h4>
-          <p class="text-xs text-gray-400 mt-1 line-clamp-2" x-html="highlight(r.summary, searchQuery)"></p>
+          <p class="text-xs text-gray-400 mt-1 line-clamp-2"
+             x-html="highlight(r.hit_field === 'transcript' ? r.transcript : r.summary, searchQuery)"></p>
         </button>
       </template>
     </div>
+  </div>
+
+  <!-- ─── SUBSCRIPTIONS (course list + checkbox + save to GitHub Secret) ─── -->
+  <div x-show="view === 'subscriptions'" class="view-enter max-w-2xl mx-auto p-4">
+
+    <!-- Empty catalog message -->
+    <div x-show="allCourses.length === 0"
+         class="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg p-4 text-sm leading-relaxed">
+      课程目录为空。请在仓库的 Actions secrets 里设置 <code class="bg-yellow-100 px-1 rounded">CRAWL_TERM</code>
+      （例如 <code class="bg-yellow-100 px-1 rounded">25</code>）并跑一次 workflow 来抓取学期课程目录。
+    </div>
+
+    <template x-if="allCourses.length > 0">
+      <div>
+        <!-- Term selector + search -->
+        <div class="flex flex-col sm:flex-row gap-2 mb-3">
+          <select x-model="subsTerm" @change="rebuildSubsFiltered()"
+                  class="border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
+            <template x-for="t in allCoursesTerms" :key="t">
+              <option :value="t" x-text="'Term ' + t"></option>
+            </template>
+          </select>
+          <input x-model="subsSearch" @input="rebuildSubsFiltered()" type="text"
+                 placeholder="搜索课程名 / 老师 / 院系 / ID…"
+                 class="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
+        </div>
+
+        <p class="text-xs text-gray-500 mb-3">
+          已选 <span class="font-semibold text-blue-600" x-text="subsSelectedIds.length"></span>
+          / 目录共 <span x-text="allCoursesForTerm.length"></span> 门课。
+          <span class="text-gray-400">（点击复选框切换订阅；保存后会写入 GitHub Secret <code class="bg-gray-100 px-1 rounded">COURSE_IDS</code>。）</span>
+        </p>
+
+        <!-- Course list -->
+        <div class="bg-white border border-gray-100 rounded-lg overflow-hidden divide-y divide-gray-100 max-h-[60vh] overflow-y-auto">
+          <template x-for="c in subsFiltered" :key="c.course_id + '@' + c.term">
+            <label class="flex items-start gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+              <input type="checkbox" class="mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-400"
+                     :checked="subsSelectedIds.includes(c.course_id)"
+                     @change="toggleSubscription(c.course_id, $event.target.checked)">
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-gray-800 truncate" x-text="c.title || '(no title)'"></p>
+                <p class="text-xs text-gray-500 mt-0.5">
+                  <span x-text="c.teacher || '—'"></span>
+                  <span x-show="c.dept" class="text-gray-400"> · <span x-text="c.dept"></span></span>
+                  <span class="text-gray-400"> · ID <span x-text="c.course_id"></span></span>
+                </p>
+              </div>
+            </label>
+          </template>
+          <p x-show="subsFiltered.length === 0" class="text-center text-gray-400 text-sm py-6">
+            没有匹配的课程。
+          </p>
+        </div>
+
+        <!-- Save error -->
+        <p x-show="subsError" x-text="subsError"
+           class="text-sm text-red-600 bg-red-50 rounded-lg p-3 mt-3"></p>
+
+        <!-- Action buttons -->
+        <div class="mt-4 flex flex-col sm:flex-row sm:items-center gap-2">
+          <button @click="saveSubscriptions()" :disabled="subsSaving"
+                  class="flex-1 bg-blue-500 text-white py-2.5 rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-2">
+            <div x-show="subsSaving" class="spinner !w-4 !h-4 !border-2 !border-white/30 !border-t-white"></div>
+            <span x-text="subsSaving ? '加密上传中…' : '保存到 GitHub Secret'"></span>
+          </button>
+          <button @click="resetSubscriptionsToCurrent()" :disabled="subsSaving"
+                  class="text-sm text-gray-500 underline disabled:opacity-50">
+            重置为当前已订阅
+          </button>
+        </div>
+        <button @click="triggerCheckRun()" :disabled="triggeringCheck"
+                class="w-full mt-2 bg-gray-100 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50 flex items-center justify-center gap-2">
+          <div x-show="triggeringCheck" class="spinner !w-4 !h-4 !border-2 !border-gray-400/30 !border-t-gray-700"></div>
+          <span x-text="triggeringCheck ? '触发中…' : '立即跑一次 workflow（使用当前 secret）'"></span>
+        </button>
+        <p class="text-xs text-gray-400 mt-2 leading-relaxed">
+          保存需要你的 GitHub PAT 具备 <strong>Secrets: Read and write</strong> 权限；
+          立即运行需要 <strong>Actions: Read and write</strong>。
+          COURSE_IDS 会被 libsodium sealed box 加密后才离开浏览器。
+        </p>
+      </div>
+    </template>
   </div>
 
   <!-- ─── SETTINGS ─── -->
@@ -525,6 +664,8 @@
 <!-- KaTeX + auto-render -->
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
+<!-- libsodium-wrappers (sealed-box encryption for GitHub Secrets PUT) -->
+<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/browsers/sodium.js"></script>
 <!-- App scripts (defer, in order, before Alpine) -->
 <script defer src="js/crypto.js"></script>
 <script defer src="js/github.js"></script>

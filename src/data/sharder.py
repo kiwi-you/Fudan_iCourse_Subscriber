@@ -32,8 +32,8 @@ import os
 import sqlite3
 import tempfile
 
-from . import crypto_box
-from .schema import SCHEMA_SQL as _SCHEMA_SQL
+from src.data import crypto_box
+from src.data.schema import SCHEMA_SQL as _SCHEMA_SQL
 
 SHARD_TARGET_BYTES = 10 * 1024 * 1024  # encrypted+gzipped target per shard
 COMPRESSION_RATIO_GUESS = 4  # gzip ratio for transcript+summary text (Chinese)
@@ -106,6 +106,22 @@ def _build_shard_db(source_db: str, course_ids: list[str], output_path: str):
     dst = sqlite3.connect(output_path)
     try:
         dst.executescript(_SCHEMA_SQL)
+
+        # ``all_courses`` is the school-wide catalog — small (~KB scale)
+        # and shared by every shard.  Replicating it into each shard keeps
+        # shards self-contained for backup/migration while letting the
+        # frontend pick up the catalog without having to merge the index.
+        catalog_rows = src.execute("SELECT * FROM all_courses").fetchall()
+        if catalog_rows:
+            cols = list(catalog_rows[0].keys())
+            col_str = ", ".join(cols)
+            ph_str = ", ".join("?" * len(cols))
+            dst.executemany(
+                f"INSERT OR REPLACE INTO all_courses ({col_str}) "
+                f"VALUES ({ph_str})",
+                [tuple(r[c] for c in cols) for r in catalog_rows],
+            )
+
         if not course_ids:
             dst.commit()
             return
@@ -273,6 +289,14 @@ def reassemble_database(
                     target.execute(
                         "INSERT OR IGNORE INTO main.ppt_pages "
                         "SELECT * FROM shard.ppt_pages"
+                    )
+                    # all_courses is replicated across every shard with
+                    # identical rows; INSERT OR IGNORE means the first
+                    # shard fills it and the rest are no-ops on the
+                    # (course_id, term) primary key.
+                    target.execute(
+                        "INSERT OR IGNORE INTO main.all_courses "
+                        "SELECT * FROM shard.all_courses"
                     )
                     target.commit()
                 finally:

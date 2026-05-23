@@ -8,3 +8,4 @@ markdown
 pygments
 rapidocr-onnxruntime
 imagehash
+psutil

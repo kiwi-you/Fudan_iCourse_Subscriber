@@ -5,8 +5,8 @@ import sqlite3
 import threading
 from datetime import datetime
 
-from . import config
-from .schema import (
+from src.runtime import config
+from src.data.schema import (
     LECTURES_MIGRATION_COLUMNS,
     PPT_PAGES_MIGRATION_COLUMNS,
     SCHEMA_SQL,
@@ -68,6 +68,74 @@ class Database:
                        title=excluded.title, teacher=excluded.teacher""",
                 (course_id, title, teacher),
             )
+
+    def upsert_all_courses_for_term(self, term: str,
+                                    rows: list[dict]) -> tuple[int, int]:
+        """Replace the catalog of courses for ``term``.
+
+        Each row in ``rows`` must have at minimum ``course_id``; ``title``,
+        ``teacher``, ``dept`` are optional.  Rows with course_ids missing
+        from the new list are DELETE-d for this term (so dropped courses
+        disappear from the frontend picker).
+
+        Returns ``(deleted, upserted)``.
+
+        We delete-then-upsert under one transaction so the term's catalog
+        is never half-empty during a concurrent frontend export.
+        """
+        now = datetime.now().isoformat()
+        keep_ids = {str(r["course_id"]) for r in rows if r.get("course_id")}
+        with self.conn:
+            if keep_ids:
+                placeholders = ",".join("?" * len(keep_ids))
+                cur = self.conn.execute(
+                    f"""DELETE FROM all_courses
+                        WHERE term = ?
+                          AND course_id NOT IN ({placeholders})""",
+                    [term, *keep_ids],
+                )
+            else:
+                cur = self.conn.execute(
+                    "DELETE FROM all_courses WHERE term = ?", (term,),
+                )
+            deleted = cur.rowcount or 0
+            upserted = 0
+            for r in rows:
+                cid = r.get("course_id")
+                if not cid:
+                    continue
+                self.conn.execute(
+                    """INSERT INTO all_courses
+                          (course_id, term, title, teacher, dept, last_seen_at)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(course_id, term) DO UPDATE SET
+                          title=excluded.title,
+                          teacher=excluded.teacher,
+                          dept=excluded.dept,
+                          last_seen_at=excluded.last_seen_at""",
+                    (str(cid), term,
+                     r.get("title"), r.get("teacher"), r.get("dept"), now),
+                )
+                upserted += 1
+        return deleted, upserted
+
+    def list_all_courses(self, term: str | None = None) -> list[dict]:
+        """Return the full course catalog, optionally scoped to a term.
+
+        Ordered by term DESC, then title — newest semester first so the
+        frontend picker shows current-term courses on top.
+        """
+        if term is None:
+            rows = self.conn.execute(
+                "SELECT * FROM all_courses ORDER BY term DESC, title"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM all_courses WHERE term = ? ORDER BY title",
+                (term,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
 
     def insert_lecture(
         self, sub_id: str, course_id: str, sub_title: str, date: str
@@ -301,12 +369,21 @@ class Database:
     def get_lectures_to_resummarize_for_courses(
         self, course_ids: list[str],
     ) -> list[dict]:
-        """Same as get_lectures_to_resummarize but scoped to course_ids.
+        """Return lectures that need a re-OCR + re-summarize pass.
 
-        The unscoped version walked every old lecture in the DB, which
-        meant every workflow run paid the cost of re-OCR'ing courses the
-        user wasn't even asking about.  Scoping limits the upgrade pass
-        to the courses the current run targets.
+        Two cases qualify (OR-ed together), both scoped to ``course_ids``:
+
+          v0 — old summary written before the PPT-aware prompt existed
+               (``summary_format_version = 0``).  These never had PPT in
+               their prompt regardless of whether PPT rows were registered.
+          missing-PPT — summary exists at any version but ``ppt_pages``
+               has no row for this lecture.  Catches v1 lectures that
+               were summarised before PPT registration was wired up;
+               whatever's in their summary did not see any PPT text.
+
+        Once a lecture has *any* ppt_pages row (even one stamped ``failed``
+        or ``invalid``), it is no longer eligible — we don't keep retrying
+        a genuinely PPT-less lecture every run.
         """
         if not course_ids:
             return []
@@ -316,8 +393,14 @@ class Database:
                FROM lectures l
                JOIN courses c ON l.course_id = c.course_id
                WHERE l.summary IS NOT NULL
-                 AND COALESCE(l.summary_format_version, 0) = 0
-                 AND l.course_id IN ({placeholders})""",
+                 AND l.course_id IN ({placeholders})
+                 AND (
+                   COALESCE(l.summary_format_version, 0) = 0
+                   OR NOT EXISTS (
+                     SELECT 1 FROM ppt_pages p
+                     WHERE p.sub_id = l.sub_id
+                   )
+                 )""",
             list(course_ids),
         ).fetchall()
         return [dict(row) for row in rows]

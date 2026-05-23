@@ -17,9 +17,9 @@ from urllib.parse import quote
 import markdown
 from pygments.formatters import HtmlFormatter
 
-from . import config
+from src.runtime import config
 
-_MD_EXTENSIONS = ["tables", "fenced_code", "nl2br", "sane_lists", "codehilite"]
+_MD_EXTENSIONS= ["tables", "fenced_code", "nl2br", "sane_lists", "codehilite"]
 
 _MD_EXTENSION_CONFIGS = {
     "codehilite": {

@@ -40,5 +40,14 @@ CREATE TABLE IF NOT EXISTS ppt_pages (
     dhash TEXT,
     PRIMARY KEY (sub_id, page_num)
 );
+CREATE TABLE IF NOT EXISTS all_courses (
+    course_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    title TEXT,
+    teacher TEXT,
+    dept TEXT,
+    last_seen_at TEXT,
+    PRIMARY KEY (course_id, term)
+);
 `,
 };

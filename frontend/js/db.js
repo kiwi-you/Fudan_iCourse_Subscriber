@@ -71,6 +71,7 @@ async function _attachShard(shardBytes) {
     _copyRows(shard, _db, "courses");
     _copyRows(shard, _db, "lectures");
     _copyRows(shard, _db, "ppt_pages");
+    _copyRows(shard, _db, "all_courses");
   } finally {
     shard.close();
   }
@@ -144,12 +145,54 @@ function _getPptPages(subId) {
 
 function _searchSummaries(query) {
   if (!query?.trim()) return [];
+  // Match against summary, transcript, and sub_title.  Transcript is the
+  // most useful for "I remember the teacher said X" lookups; summary
+  // covers "I read it in the notes"; sub_title covers session names.
+  // We mark which field hit so the UI can show the right snippet.
+  const q = query;
   return _queryAll(`
-    SELECT l.sub_id, l.sub_title, l.summary, l.course_id, c.title AS course_title
+    SELECT l.sub_id, l.sub_title, l.summary, l.transcript,
+           l.course_id, c.title AS course_title,
+           CASE
+             WHEN l.summary    LIKE '%' || ? || '%' THEN 'summary'
+             WHEN l.sub_title  LIKE '%' || ? || '%' THEN 'sub_title'
+             WHEN l.transcript LIKE '%' || ? || '%' THEN 'transcript'
+             ELSE 'other'
+           END AS hit_field
     FROM lectures l JOIN courses c ON l.course_id = c.course_id
-    WHERE l.summary LIKE '%' || ? || '%' OR l.sub_title LIKE '%' || ? || '%'
+    WHERE l.summary    LIKE '%' || ? || '%'
+       OR l.sub_title  LIKE '%' || ? || '%'
+       OR l.transcript LIKE '%' || ? || '%'
     ORDER BY l.processed_at DESC LIMIT 50
-  `, [query, query]);
+  `, [q, q, q, q, q, q]);
+}
+
+function _getAllCourses(term) {
+  // Catalog of every course offered by the school for ``term`` (or all
+  // terms if undefined).  Populated by main.py's CRAWL_TERM-driven crawl;
+  // empty until that env var has been set at least once on the CI side.
+  if (term) {
+    return _queryAll(
+      "SELECT * FROM all_courses WHERE term = ? ORDER BY title",
+      [term],
+    );
+  }
+  return _queryAll(
+    "SELECT * FROM all_courses ORDER BY term DESC, title"
+  );
+}
+
+function _getAllCoursesTerms() {
+  return _queryAll(
+    "SELECT DISTINCT term FROM all_courses ORDER BY term DESC"
+  ).map((r) => r.term);
+}
+
+function _getSubscribedCourseIds() {
+  // The ``courses`` table holds courses we've actually run.  This is our
+  // best signal of "currently subscribed" without reading the
+  // COURSE_IDS secret (which GitHub never exposes back).
+  return _queryAll("SELECT course_id FROM courses").map((r) => r.course_id);
 }
 
 window.ICS.db = {
@@ -161,4 +204,7 @@ window.ICS.db = {
   getLecture: _getLecture,
   getPptPages: _getPptPages,
   searchSummaries: _searchSummaries,
+  getAllCourses: _getAllCourses,
+  getAllCoursesTerms: _getAllCoursesTerms,
+  getSubscribedCourseIds: _getSubscribedCourseIds,
 };

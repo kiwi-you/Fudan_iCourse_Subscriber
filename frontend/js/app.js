@@ -68,6 +68,16 @@ const _loadCreds = () => { try { return JSON.parse(localStorage.getItem(_LS + "c
 const _saveCreds = (c) => localStorage.setItem(_LS + "creds", JSON.stringify(c));
 const _loadSettings = () => { try { return JSON.parse(localStorage.getItem(_LS + "settings")) || {}; } catch { return {}; } };
 const _saveSettings = (s) => localStorage.setItem(_LS + "settings", JSON.stringify(s));
+/* Starred-course IDs are per-browser (localStorage). The school side
+   doesn't need to know; the user just wants their favorites pinned to
+   the top of their own view. */
+const _loadStarred = () => {
+  try { return new Set(JSON.parse(localStorage.getItem(_LS + "starred")) || []); }
+  catch { return new Set(); }
+};
+const _saveStarred = (set) => localStorage.setItem(
+  _LS + "starred", JSON.stringify(Array.from(set))
+);
 
 function _relativeTime(iso) {
   if (!iso) return "";
@@ -203,6 +213,17 @@ document.addEventListener("alpine:init", () => {
     exportDialogOpen: false, exportSelection: {}, exportingPdf: false,
     iterations: 100000, repoOwner: "", repoName: "", dataBranch: "data",
     _history: [],
+    /* Subscriptions editor state. ``subsSelectedIds`` is the working list
+       the user is editing; ``subsCurrentIds`` is the read-only snapshot
+       of what's actually deployed (from the courses table) so we can
+       offer a "reset" button. */
+    allCourses: [], allCoursesTerms: [],
+    subsTerm: "", subsSearch: "",
+    subsSelectedIds: [], subsCurrentIds: [], subsFiltered: [],
+    subsSaving: false, subsError: "",
+    triggeringCheck: false,
+    /* Per-browser pinned-courses set, lazily synced to localStorage. */
+    starred: _loadStarred(),
 
     async init() {
       const detected = ICS.github.detectRepo();
@@ -257,7 +278,9 @@ document.addEventListener("alpine:init", () => {
     _go(view, params) {
       params = params || {};
       this.error = null;
-      if (view === "courses") { this.courses = ICS.db.getCourses(); }
+      if (view === "courses") {
+        this.courses = this._sortCoursesByStar(ICS.db.getCourses());
+      }
       else if (view === "lectures" && params.courseId) {
         this.currentCourse = this.courses.find(x => x.course_id === params.courseId) || { course_id: params.courseId, title: "...", teacher: "" };
         this.lectures = ICS.db.getLectures(params.courseId);
@@ -272,6 +295,17 @@ document.addEventListener("alpine:init", () => {
       this.view = view;
       if (view !== "lectures") this.exportDialogOpen = false;
     },
+    _sortCoursesByStar(list) {
+      // Stable two-key sort: starred first (descending = pinned), then
+      // by the existing last_updated DESC the SQL already produced.
+      var starred = this.starred;
+      return list.slice().sort(function (a, b) {
+        var sa = starred.has(String(a.course_id)) ? 0 : 1;
+        var sb = starred.has(String(b.course_id)) ? 0 : 1;
+        if (sa !== sb) return sa - sb;
+        return 0;  // preserve SQL order within each group
+      });
+    },
     goBack() {
       const p = this._history.pop();
       if (p) this._go(p.view, { courseId: p.courseId, subId: p.lectureId });
@@ -280,6 +314,48 @@ document.addEventListener("alpine:init", () => {
 
     openCourse(id) { this.navigate("lectures", { courseId: id }); },
     openLecture(id) { this.navigate("detail", { subId: id }); },
+
+    /* Prev/next within the current course's lecture list.  Lectures are
+       ordered ascending by sub_id (matches the lectures view), so "prev"
+       is the lecture at index-1 and "next" is at index+1. */
+    _currentLectureIndex() {
+      if (!this.currentLecture || !this.lectures) return -1;
+      return this.lectures.findIndex(
+        (l) => String(l.sub_id) === String(this.currentLecture.sub_id)
+      );
+    },
+    prevLecture() {
+      var i = this._currentLectureIndex();
+      return i > 0 ? this.lectures[i - 1] : null;
+    },
+    nextLecture() {
+      var i = this._currentLectureIndex();
+      return (i >= 0 && i + 1 < this.lectures.length)
+        ? this.lectures[i + 1] : null;
+    },
+    gotoPrevLecture() {
+      var lec = this.prevLecture();
+      if (lec) this._go("detail", { subId: lec.sub_id });
+    },
+    gotoNextLecture() {
+      var lec = this.nextLecture();
+      if (lec) this._go("detail", { subId: lec.sub_id });
+    },
+
+    /* Star/pin a course.  Per-browser localStorage state; no roundtrip
+       to GitHub.  Re-sorts the courses list immediately so the user
+       sees the pin take effect without navigating away. */
+    isStarred(courseId) {
+      return this.starred.has(String(courseId));
+    },
+    toggleStar(courseId) {
+      var cid = String(courseId);
+      if (this.starred.has(cid)) this.starred.delete(cid);
+      else this.starred.add(cid);
+      _saveStarred(this.starred);
+      // Reactive refresh — re-sort in place.
+      this.courses = this._sortCoursesByStar(this.courses);
+    },
 
     /* Three-state detail viewer.  The button shown to the user always
        advertises the *next* state so the label reads as an action. */
@@ -432,6 +508,142 @@ document.addEventListener("alpine:init", () => {
       indexedDB.deleteDatabase(_idbName);
       this.view = "setup";
       this.setup = { token: "", stuid: "", uispsw: "", dashscope: "", smtp: "" };
+    },
+
+    // ── Subscriptions editor ────────────────────────────────────────
+    openSubscriptions() {
+      // Pull the catalog + currently-subscribed list from the DB (sourced
+      // from the courses table; that's our best signal of "what's running"
+      // since GitHub never lets us read secret values back).  When the
+      // user just saved a new list this run, the localStorage cache wins
+      // — it reflects what was actually pushed to the secret, not the
+      // stale ``courses`` snapshot.
+      this.allCourses = ICS.db.getAllCourses();
+      this.allCoursesTerms = ICS.db.getAllCoursesTerms();
+      this.subsTerm = this.allCoursesTerms[0] || "";
+      this.subsSearch = "";
+      let current = ICS.db.getSubscribedCourseIds().map(String);
+      try {
+        const cached = JSON.parse(
+          localStorage.getItem(_LS + "lastSubscribed") || "null"
+        );
+        if (Array.isArray(cached) && cached.length) {
+          // Union — if a previously-subscribed course is also in the DB
+          // (workflow already ran for it) we keep it; if only in cache,
+          // also keep it so the user doesn't lose their pending save.
+          const seen = new Set(current.map(String));
+          for (const cid of cached) {
+            if (!seen.has(String(cid))) current.push(String(cid));
+          }
+        }
+      } catch {}
+      this.subsCurrentIds = current;
+      this.subsSelectedIds = this.subsCurrentIds.slice();
+      this.subsError = "";
+      this.rebuildSubsFiltered();
+      this.navigate("subscriptions");
+    },
+    get allCoursesForTerm() {
+      if (!this.subsTerm) return this.allCourses;
+      return this.allCourses.filter((c) => c.term === this.subsTerm);
+    },
+    rebuildSubsFiltered() {
+      const q = (this.subsSearch || "").trim().toLowerCase();
+      const list = this.allCoursesForTerm;
+      // Subscribed rows always float to the top so the user sees current
+      // selections without scrolling, regardless of search filter.
+      const selected = new Set(this.subsSelectedIds.map(String));
+      const ranked = list.map((c) => ({
+        c,
+        score: selected.has(String(c.course_id)) ? 0 : 1,
+      }));
+      const filtered = ranked.filter(({ c }) => {
+        if (!q) return true;
+        return [c.title, c.teacher, c.dept, c.course_id]
+          .filter(Boolean)
+          .some((s) => String(s).toLowerCase().includes(q));
+      });
+      filtered.sort((a, b) => a.score - b.score
+        || String(a.c.title || "").localeCompare(String(b.c.title || "")));
+      this.subsFiltered = filtered.map(({ c }) => c);
+    },
+    toggleSubscription(courseId, checked) {
+      const cid = String(courseId);
+      const cur = new Set(this.subsSelectedIds.map(String));
+      if (checked) cur.add(cid); else cur.delete(cid);
+      this.subsSelectedIds = Array.from(cur);
+      // No re-sort on toggle — keeps the just-clicked row stable so the
+      // user can rapidly toggle multiple rows without the UI jumping.
+    },
+    resetSubscriptionsToCurrent() {
+      this.subsSelectedIds = this.subsCurrentIds.slice();
+      this.subsError = "";
+      this.rebuildSubsFiltered();
+    },
+    async saveSubscriptions() {
+      if (this.subsSaving) return;
+      const creds = _loadCreds();
+      if (!creds?.token) {
+        this.subsError = "未登录或 PAT 缺失。";
+        return;
+      }
+      if (!this.repoOwner || !this.repoName) {
+        this.subsError = "Repo owner/name 未设置，请到 Settings 配置。";
+        return;
+      }
+      this.subsSaving = true;
+      this.subsError = "";
+      try {
+        const written = await ICS.github.setCourseIdsSecret(
+          this.repoOwner, this.repoName, creds.token, this.subsSelectedIds,
+        );
+        this._toast(
+          `已保存 ${written.split(",").filter(Boolean).length} 门课到 COURSE_IDS secret`,
+          "success",
+        );
+        // Treat the saved state as the new "current" so subsequent
+        // re-opens of the editor compare against it correctly.  We don't
+        // re-fetch courses table — that updates only after the next
+        // workflow run creates the lectures.
+        this.subsCurrentIds = this.subsSelectedIds.slice();
+        // Remember the saved set across reloads so that if user re-opens
+        // the editor before a workflow run, they see what they just saved
+        // rather than the stale `courses` snapshot.
+        try {
+          localStorage.setItem(
+            _LS + "lastSubscribed",
+            JSON.stringify(this.subsCurrentIds),
+          );
+        } catch {}
+      } catch (e) {
+        this.subsError = e?.message || "保存失败";
+      } finally {
+        this.subsSaving = false;
+      }
+    },
+
+    async triggerCheckRun() {
+      // Fires the daily check workflow on demand so the user can see their
+      // newly-saved subscription list applied without waiting for the
+      // scheduled cron.
+      if (this.triggeringCheck) return;
+      const creds = _loadCreds();
+      if (!creds?.token) {
+        this.subsError = "未登录或 PAT 缺失。";
+        return;
+      }
+      this.triggeringCheck = true;
+      this.subsError = "";
+      try {
+        await ICS.github.triggerCheckWorkflow(
+          this.repoOwner, this.repoName, "main", creds.token,
+        );
+        this._toast("已触发 workflow，请到 Actions 标签查看进度", "success");
+      } catch (e) {
+        this.subsError = e?.message || "触发失败";
+      } finally {
+        this.triggeringCheck = false;
+      }
     },
 
     _toast(msg, type) {

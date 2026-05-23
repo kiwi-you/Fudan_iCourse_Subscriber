@@ -18,8 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.crypto_box import derive_new_password
-from src.sharder import (
+from src.data.crypto_box import derive_new_password
+from src.data.sharder import (
     INDEX_FILENAME,
     SHARDS_DIR,
     load_index,

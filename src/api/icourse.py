@@ -11,8 +11,32 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import config
-from .webvpn import WebVPNSession
+from src.runtime import config
+from src.api.webvpn import WebVPNSession, get_vpn_url
+
+
+def fetch_ppt_image(client: "ICourseClient", item: dict,
+                    max_attempts: int = 2, timeout: int = 30) -> bytes | None:
+    """Download a single PPT image. Returns bytes or None on persistent failure.
+
+    Module-level (not a method on ICourseClient) so worker threads in the
+    scheduler can call it without binding the function name at import time —
+    that way tests can monkey-patch ``src.icourse.fetch_ppt_image`` and the
+    scheduler will pick up the replacement on its next worker invocation.
+    """
+    url = item["pptimgurl"]
+    for attempt in range(1, max_attempts + 1):
+        try:
+            vpn_url = get_vpn_url(url) if not url.startswith(client.base_url) else url
+            resp = client.vpn.get(vpn_url, timeout=timeout)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as e:
+            print(f"[PPTFetcher] download failed (attempt "
+                  f"{attempt}/{max_attempts}): {type(e).__name__}: {e}")
+            if attempt < max_attempts:
+                time.sleep(1)
+    return None
 
 
 class ICourseClient:
@@ -209,6 +233,55 @@ class ICourseClient:
             "courses": result.get("list", []),
         }
 
+    def list_semester_courses(self, term: str,
+                              per_page: int = 100,
+                              max_pages: int = 50) -> list[dict]:
+        """Walk every page of get-course-list for ``term``.
+
+        Returns a flat list of ``{course_id, title, teacher, dept}`` dicts,
+        deduped by course_id (preserving first occurrence).  ``dept`` is
+        opportunistic — the API exposes several possible field names for
+        the department (``kkxy_name``, ``school_name``, ``dept_name``);
+        we pick the first one that's present, falling back to None.
+
+        Pagination stops when the API returns fewer than ``per_page``
+        items OR when ``max_pages`` is exceeded (defensive cap so a
+        misbehaving API doesn't run us forever).
+        """
+        out: list[dict] = []
+        seen: set[str] = set()
+        for page in range(1, max_pages + 1):
+            result = self.get_course_list(
+                term=term, page=page, per_page=per_page,
+            )
+            page_items = result.get("courses", [])
+            if not page_items:
+                break
+            for raw in page_items:
+                cid = raw.get("id") or raw.get("course_id")
+                if not cid:
+                    continue
+                cid = str(cid)
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                # Department field name varies across tenants — try the
+                # ones we've seen and fall back to None rather than
+                # forcing an empty string into the DB.
+                dept = (
+                    raw.get("kkxy_name") or raw.get("school_name")
+                    or raw.get("dept_name") or raw.get("kkxy") or None
+                )
+                out.append({
+                    "course_id": cid,
+                    "title": raw.get("title") or "",
+                    "teacher": raw.get("realname") or raw.get("teacher") or "",
+                    "dept": dept,
+                })
+            if len(page_items) < per_page:
+                break
+        return out
+
     def get_lecture_detail(self, course_id: str, sub_id: str) -> dict:
         """Get details for a specific lecture, including video URL info.
 
@@ -364,7 +437,6 @@ class ICourseClient:
         Returns:
             (vpn_url, http_headers) where http_headers is ffmpeg-compatible.
         """
-        from .webvpn import get_vpn_url
         vpn_url = get_vpn_url(video_url)
         cookies = "; ".join(
             f"{c.name}={c.value}" for c in self.vpn.session.cookies
