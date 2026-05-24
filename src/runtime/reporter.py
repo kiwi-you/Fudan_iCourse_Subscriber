@@ -18,13 +18,36 @@ import threading
 import time
 
 
-def _resource_meter() -> str:
-    """Return a short CPU + memory suffix for progress lines."""
+# ── Resource state for _resource_meter (kept across calls) ────────────────
+_net_last: tuple[float, int, int] | None = None  # (time, sent, recv)
+
+
+def _resource_meter(bound: str = "") -> str:
+    """Return CPU + memory + network suffix for progress lines.
+
+    ``bound`` indicates the limiting resource: "cpu" (ASR/OCR) or "io"
+    (download).  Network throughput is computed as a delta since the
+    previous call using module-level state.
+    """
+    global _net_last
     try:
         import psutil
         cpu = psutil.cpu_percent()
         mem = psutil.virtual_memory().percent
-        return f"  (cpu={cpu:.0f}% mem={mem:.0f}%)"
+        now = time.time()
+
+        net = psutil.net_io_counters()
+        if _net_last is not None:
+            dt = now - _net_last[0]
+            up = (net.bytes_sent - _net_last[1]) / max(dt, 0.1) / 1024
+            down = (net.bytes_recv - _net_last[2]) / max(dt, 0.1) / 1024
+            net_str = f" down={down:.0f}KB/s"
+        else:
+            net_str = ""
+        _net_last = (now, net.bytes_sent, net.bytes_recv)
+
+        tag = f"[{bound.upper()}] " if bound else ""
+        return f"  {tag}(cpu={cpu:.0f}% mem={mem:.0f}%{net_str})"
     except Exception:
         return ""
 
@@ -165,7 +188,7 @@ class Reporter:
             elapsed = max(time.time() - st["t0"], 0.001)
             rate = done / elapsed
             bar = self._bar(done, total)
-            _rm = _resource_meter()
+            _rm = _resource_meter("io")
             print(f"    [Images {sub_id}] {bar} {done}/{total} "
                   f"({rate:.1f} pic/s){_rm}", flush=True)
             if is_final:
@@ -219,7 +242,7 @@ class Reporter:
             elapsed = max(time.time() - st["t0"], 0.001)
             rate = done / elapsed
             bar = self._bar(done, total)
-            _rm = _resource_meter()
+            _rm = _resource_meter("cpu")
             print(f"    [OCR {sub_id}] {bar} {done}/{total} "
                   f"({rate:.2f} page/s){_rm}", flush=True)
             if is_final:

@@ -38,11 +38,31 @@ BYTES_PER_SECOND = SAMPLE_RATE * BYTES_PER_SAMPLE
 SILENCE_GAP_THRESHOLD_SEC = 30 * 60  # 30 min of no speech → suspected cutoff
 
 
-def _resource_meter() -> str:
-    """Short CPU + memory suffix for progress lines."""
+# ── Shared resource meter state (network delta tracking) ──────────────────
+_rm_net_last: tuple[float, int, int] | None = None
+
+
+def _resource_meter(bound: str = "") -> str:
+    """CPU + memory + network throughput suffix for progress lines.
+    ``bound`` indicates the limiting resource (e.g. "cpu", "io").
+    """
+    global _rm_net_last
     try:
         import psutil
-        return f"  (cpu={psutil.cpu_percent():.0f}% mem={psutil.virtual_memory().percent:.0f}%)"
+        cpu = psutil.cpu_percent()
+        mem = psutil.virtual_memory().percent
+        now = time.time()
+        net = psutil.net_io_counters()
+        if _rm_net_last is not None:
+            dt = now - _rm_net_last[0]
+            up = (net.bytes_sent - _rm_net_last[1]) / max(dt, 0.1) / 1024
+            down = (net.bytes_recv - _rm_net_last[2]) / max(dt, 0.1) / 1024
+            ns = f" down={down:.0f}KB/s"
+        else:
+            ns = ""
+        _rm_net_last = (now, net.bytes_sent, net.bytes_recv)
+        tag = f"[{bound.upper()}] " if bound else ""
+        return f"  {tag}(cpu={cpu:.0f}% mem={mem:.0f}%{ns})"
     except Exception:
         return ""
 
@@ -344,7 +364,7 @@ class Transcriber:
                     f"[Transcriber] Progress: {audio_pos:.0f}s audio,"
                     f" {total_bytes / 1024 / 1024:.1f} MB consumed,"
                     f" {speed_kbps:.1f} KB/s,"
-                    f" {len(segments)} segments so far{_resource_meter()}",
+                    f" {len(segments)} segments so far{_resource_meter("cpu")}",
                     flush=True,
                 )
                 last_report = now
