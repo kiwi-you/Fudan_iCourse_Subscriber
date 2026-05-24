@@ -221,16 +221,6 @@
         <input x-model="setup.uispsw" type="password"
                class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none">
       </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">DASHSCOPE_API_KEY</label>
-        <input x-model="setup.dashscope" type="password" placeholder="sk-..."
-               class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 focus:outline-none">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">SMTP_PASSWORD (QQ authorization code)</label>
-        <input x-model="setup.smtp" type="password"
-               class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 focus:outline-none">
-      </div>
 
       <!-- Advanced -->
       <details class="text-sm">
@@ -533,8 +523,6 @@
         {key: 'token', label: 'GitHub PAT'},
         {key: 'stuid', label: 'STUID'},
         {key: 'uispsw', label: 'UISPSW'},
-        {key: 'dashscope', label: 'DASHSCOPE_API_KEY'},
-        {key: 'smtp', label: 'SMTP_PASSWORD'}
       ]" :key="field.key">
         <div>
           <label class="block text-xs text-gray-500 mb-1" x-text="field.label"></label>

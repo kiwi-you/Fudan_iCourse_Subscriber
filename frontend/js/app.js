@@ -207,7 +207,7 @@ document.addEventListener("alpine:init", () => {
     detailView: "summary",
     searchQuery: "", searchResults: [],
     commitSha: null,
-    setup: { token: "", stuid: "", uispsw: "", dashscope: "", smtp: "" },
+    setup: { token: "", stuid: "", uispsw: "" },
     setupError: "", setupTesting: false,
     settingsForm: {}, showSecrets: {},
     exportDialogOpen: false, exportSelection: {}, exportingPdf: false,
@@ -240,23 +240,27 @@ document.addEventListener("alpine:init", () => {
     async _loadDB(creds) {
       this.view = "loading"; this.error = null;
       try {
-        this.loadingMsg = "Checking for updates...";
+        this.loadingMsg = "Connecting to GitHub API...";
         var manifest = await ICS.github.fetchShardManifest(
           this.repoOwner, this.repoName, this.dataBranch, creds.token,
         );
         this.commitSha = manifest.commitSha;
 
         if (manifest.format === "sharded") {
+          this.loadingMsg = "Deriving decryption key...";
           var pw = await ICS.crypto.buildPasswordV2(creds);
+
+          this.loadingMsg = "Downloading + decrypting shard index...";
           var self = this;
           await _loadFromShardManifest(
             manifest, this.repoOwner, this.repoName, pw, creds.token,
             function (i, n, name) {
-              self.loadingMsg = "Loading shard " + i + "/" + n + " (" + name + ")...";
+              self.loadingMsg = "Shard " + i + "/" + n
+                + " — downloading + decrypting (" + name + ")...";
             },
           );
         } else {
-          this.loadingMsg = "Loading legacy database...";
+          this.loadingMsg = "Downloading + decrypting legacy database...";
           await _loadFromLegacyBlob(
             manifest, this.repoOwner, this.repoName, creds, creds.token,
           );
@@ -507,7 +511,7 @@ document.addEventListener("alpine:init", () => {
       localStorage.removeItem(_LS + "settings");
       indexedDB.deleteDatabase(_idbName);
       this.view = "setup";
-      this.setup = { token: "", stuid: "", uispsw: "", dashscope: "", smtp: "" };
+      this.setup = { token: "", stuid: "", uispsw: "" };
     },
 
     // ── Subscriptions editor ────────────────────────────────────────
