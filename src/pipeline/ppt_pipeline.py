@@ -80,7 +80,8 @@ class PPTAsyncHandle:
 
     def __init__(self, pipeline: "PPTPipeline", sub_id: str,
                  *, total: int, inserted: int,
-                 futures: list[Future], dedupped: int, presubmit_failed: int):
+                 futures: list[Future], dedupped: int, presubmit_failed: int,
+                 images: dict[int, bytes] | None = None):
         self._pipeline = pipeline
         self._sub_id = sub_id
         self._total = total
@@ -88,12 +89,31 @@ class PPTAsyncHandle:
         self._futures = futures
         self._dedupped = dedupped
         self._presubmit_failed = presubmit_failed
+        self._images = images  # non-None when OCR was deferred
+        self._ocr_submitted = False
         self._drained: PPTStats | None = None
 
     def drain(self) -> PPTStats:
         """Block until every OCR future resolves; return aggregate stats."""
         if self._drained is not None:
             return self._drained
+        # If OCR was deferred (submit with defer_ocr=True), submit it now
+        # so that drain blocks for the actual OCR work, not an empty list.
+        if self._images and not self._ocr_submitted:
+            self._ocr_submitted = True
+            s = self._pipeline._scheduler
+            if self._pipeline._reporter and self._images:
+                self._pipeline._reporter.ocr_progress_start(
+                    self._sub_id, len(self._images),
+                )
+            for page_num, img in self._images.items():
+                self._futures.append(
+                    s.submit_ocr(
+                        self._pipeline._ocr_worker,
+                        self._sub_id, page_num, img,
+                    )
+                )
+            self._images = None  # release memory
         done = invalid = 0
         failed = self._presubmit_failed
         for fut in as_completed(self._futures):
@@ -134,7 +154,7 @@ class PPTPipeline:
     # ── Public entry points ─────────────────────────────────────────────
 
     def submit(self, client: "ICourseClient", course_id: str,
-               sub_id: str) -> PPTAsyncHandle:
+               sub_id: str, *, defer_ocr: bool = False) -> PPTAsyncHandle:
         """Stages 1-3 run inline; stage 4 (OCR) is submitted to the pool.
 
         Returns immediately with a handle so the caller can do ASR (or any
@@ -195,28 +215,25 @@ class PPTPipeline:
             self._db.update_ppt_page(sub_id, page_num, None, "dedup_dropped")
             images.pop(page_num, None)
 
-        # Stage 4 — submit OCR jobs.  ``submit_ocr`` wraps the worker in
-        # the dynamic semaphore so live concurrency stays at the current
-        # ResourceMonitor target even if the pool itself is bigger.
-        ocr_count = sum(
-            1 for page_num in images if page_num not in dropped_pages
-        )
-        if self._reporter and ocr_count:
-            self._reporter.ocr_progress_start(sub_id, ocr_count)
+        # Stage 4 — optionally submit OCR.  When defer_ocr=True, OCR is
+        # skipped now and submitted lazily in handle.drain() to avoid
+        # CPU contention with ASR (the caller runs ASR between submit
+        # and drain).
+        keep_images: dict[int, bytes] = {
+            pn: img for pn, img in images.items() if pn not in dropped_pages
+        }
         futures: list[Future] = []
-        for page_num, img in images.items():
-            if page_num in dropped_pages:
-                continue
-            futures.append(
-                self._scheduler.submit_ocr(
-                    self._ocr_worker, sub_id, page_num, img,
+        if not defer_ocr:
+            if self._reporter and keep_images:
+                self._reporter.ocr_progress_start(sub_id, len(keep_images))
+            for page_num, img in keep_images.items():
+                futures.append(
+                    self._scheduler.submit_ocr(
+                        self._ocr_worker, sub_id, page_num, img,
+                    )
                 )
-            )
+            keep_images = {}  # release memory; workers hold closures
 
-        # The prefetch cache's reference is no longer needed — every OCR
-        # worker holds its own reference to the bytes via closure.  Drop
-        # the cache entry so its dict can be GC'd; the local ``images``
-        # variable goes out of scope when ``submit`` returns.
         self._scheduler.image_cache.discard(sub_id)
 
         return PPTAsyncHandle(
@@ -224,6 +241,7 @@ class PPTPipeline:
             total=total, inserted=inserted, futures=futures,
             dedupped=len(dropped_pages),
             presubmit_failed=presubmit_failed,
+            images=keep_images or None,
         )
 
     def run_blocking(self, client: "ICourseClient", course_id: str,

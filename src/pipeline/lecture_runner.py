@@ -89,8 +89,12 @@ class LectureRunner:
             self._db.clear_error(sub_id)
             return existing["summary"]
 
-        # ── Phase B — submit PPT pipeline (PrefetchCache, OCR pool) ────
-        ppt_handle = self._ppt.submit(self._client, course_id, sub_id)
+        # ── Phase B — submit PPT pipeline (fetch + dedup, no OCR yet) ──
+        # OCR is deferred (defer_ocr=True) so ASR in Phase D gets exclusive
+        # CPU.  OCR will be submitted in Phase E (handle.drain()).
+        ppt_handle = self._ppt.submit(
+            self._client, course_id, sub_id, defer_ocr=True,
+        )
 
         # ── Phase C — schedule next lecture's prefetch ─────────────────
         # Done BEFORE ASR so the next audio download can start filling its
