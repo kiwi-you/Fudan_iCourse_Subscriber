@@ -167,9 +167,6 @@ async function _fetchShardManifest(owner, repo, branch, token) {
   };
 }
 
-  throw new Error(`GitHub API error ${res.status}: ${body}`);
-}
-
 /* ── Actions secrets API ────────────────────────────────────────────────
    Reads/writes repository-level Action secrets.  The encryption is
    libsodium ``crypto_box_seal`` against a per-repo public key — same
