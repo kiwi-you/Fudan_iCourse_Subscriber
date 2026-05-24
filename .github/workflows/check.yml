@@ -65,11 +65,12 @@ jobs:
       - name: Fetch database from data branch
         run: |
           mkdir -p data
-          git fetch origin data --depth=1 2>/dev/null || echo "No data branch yet."
-          if ! git rev-parse origin/data >/dev/null 2>&1; then
-            echo "No data branch, starting fresh."
-            exit 0
-          fi
+          git fetch --depth=1 origin refs/heads/data:refs/remotes/origin/data 2>/dev/null \
+            || { echo "No data branch, starting fresh."; exit 0; }
+          git show origin/data:data/icourse-index.enc >/dev/null 2>&1 \
+            || git show origin/data:data/icourse.db.gz.enc >/dev/null 2>&1 \
+            || git show origin/data:data/icourse.db.enc >/dev/null 2>&1 \
+            || { echo "No database found on data branch, starting fresh."; exit 0; }
           # Prefer the sharded layout (current).
           if git cat-file -e origin/data:data/icourse-index.enc 2>/dev/null; then
             mkdir -p data/sharded/shards
