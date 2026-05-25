@@ -199,7 +199,7 @@ class WebVPNSession:
         vpn_url = get_vpn_url(casapi_url)
 
         # Follow redirect chain to reach IDP login page and extract lck
-        resp = self.session.get(vpn_url, allow_redirects=False, timeout=30)
+        resp = self.session.get(vpn_url, allow_redirects=False, timeout=60)
         lck = None
         for _ in range(15):
             location = resp.headers.get("Location", "")
@@ -212,7 +212,7 @@ class WebVPNSession:
             if not location.startswith("http"):
                 location = urljoin(resp.url, location)
             resp = self.session.get(
-                location, allow_redirects=False, timeout=30
+                location, allow_redirects=False, timeout=60
             )
 
         if not lck:
@@ -241,7 +241,7 @@ class WebVPNSession:
                 "Referer": f"{idp_vpn_base}/ac/",
                 "Origin": config.WEBVPN_BASE,
             },
-            timeout=30,
+            timeout=60,
         )
         data = resp.json()
         auth_method_list = data.get("data", [])
@@ -262,7 +262,7 @@ class WebVPNSession:
         resp = self.session.get(
             url,
             headers={"Referer": f"{idp_vpn_base}/ac/"},
-            timeout=30,
+            timeout=60,
         )
         data = resp.json()
         pub_key_b64 = data.get("data", "")
@@ -297,7 +297,7 @@ class WebVPNSession:
                 "Referer": f"{idp_vpn_base}/ac/",
                 "Origin": config.WEBVPN_BASE,
             },
-            timeout=30,
+            timeout=60,
         )
         data = resp.json()
 
@@ -321,7 +321,7 @@ class WebVPNSession:
                 "Referer": f"{idp_vpn_base}/ac/",
                 "Origin": config.WEBVPN_BASE,
             },
-            timeout=30,
+            timeout=60,
         )
         html = resp.text
 
@@ -356,7 +356,7 @@ class WebVPNSession:
         test_url = get_vpn_url(
             f"{config.ICOURSE_BASE}/userapi/v1/infosimple"
         )
-        resp = self.session.get(test_url, timeout=30)
+        resp = self.session.get(test_url, timeout=60)
         if resp.status_code == 200:
             try:
                 user_data = resp.json()
@@ -401,12 +401,12 @@ class WebVPNSession:
             f"{config.IDP_BASE}/idp/authCenter/authenticate"
             f"?service={quote(service_url, safe='')}"
         )
-        resp = self.session.get(url, allow_redirects=False, timeout=30)
+        resp = self.session.get(url, allow_redirects=False, timeout=60)
 
         # Follow redirects manually to extract lck
         location = resp.headers.get("Location", "")
         while resp.status_code in (301, 302) and "lck=" not in location:
-            resp = self.session.get(location, allow_redirects=False, timeout=30)
+            resp = self.session.get(location, allow_redirects=False, timeout=60)
             location = resp.headers.get("Location", "")
 
         if resp.status_code in (301, 302):
@@ -437,7 +437,7 @@ class WebVPNSession:
                 "Referer": f"{config.IDP_BASE}/ac/",
                 "Origin": config.IDP_BASE,
             },
-            timeout=30,
+            timeout=60,
         )
         data = resp.json()
 
@@ -467,7 +467,7 @@ class WebVPNSession:
             headers={
                 "Referer": f"{config.IDP_BASE}/ac/",
             },
-            timeout=30,
+            timeout=60,
         )
         data = resp.json()
         pub_key_b64 = data.get("data", "")
@@ -521,7 +521,7 @@ class WebVPNSession:
                 "Referer": f"{config.IDP_BASE}/ac/",
                 "Origin": config.IDP_BASE,
             },
-            timeout=30,
+            timeout=60,
         )
         data = resp.json()
 
@@ -548,7 +548,7 @@ class WebVPNSession:
                 "Referer": f"{config.IDP_BASE}/ac/",
                 "Origin": config.IDP_BASE,
             },
-            timeout=30,
+            timeout=60,
         )
 
         # The response is HTML containing a JS redirect with the ticket URL
