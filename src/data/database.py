@@ -418,9 +418,12 @@ class Database:
                  AND l.course_id IN ({placeholders})
                  AND (
                    COALESCE(l.summary_format_version, 0) = 0
-                   OR NOT EXISTS (
-                     SELECT 1 FROM ppt_pages p
-                     WHERE p.sub_id = l.sub_id
+                   OR (
+                     COALESCE(l.summary_format_version, 0) < 1
+                     AND NOT EXISTS (
+                       SELECT 1 FROM ppt_pages p
+                       WHERE p.sub_id = l.sub_id
+                     )
                    )
                  )""",
             list(course_ids),
