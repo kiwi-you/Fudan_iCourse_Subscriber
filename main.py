@@ -210,26 +210,52 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
 
 
 def _crawl_semester_catalog(client: ICourseClient, db: Database,
-                            reporter: Reporter, term: str) -> None:
-    """If CRAWL_TERM is set, refresh ``all_courses`` for that term.
+                            reporter: Reporter) -> None:
+    """Auto-discover every available semester and refresh ``all_courses``.
 
-    Walks every page of get-course-list and replaces the term's catalog
-    in one transaction.  Frontend uses this data for the subscription
-    editor's searchable picker.
+    Walks every page of get-course-list for each discovered term and
+    replaces the term's catalog in one transaction.  No longer requires
+    the ``CRAWL_TERM`` secret — the API tells us what terms exist.
     """
-    if not term:
-        return
-    reporter.crawl_courses_start(term)
-    t0 = time.time()
+    reporter.info("Discovering available semesters from API...")
     try:
         _check_session(client)
-        rows = client.list_semester_courses(term)
-        deleted, upserted = db.upsert_all_courses_for_term(term, rows)
-        reporter.crawl_courses_done(
-            term, len(rows), deleted, upserted, time.time() - t0,
-        )
+        terms = client.discover_terms()
     except Exception as e:
-        reporter.crawl_courses_failed(term, e)
+        reporter.crawl_courses_failed("discovery", e)
+        return
+
+    if not terms:
+        reporter.info("No semesters found via API discovery.")
+        return
+
+    reporter.info(f"Found {len(terms)} semester(s): "
+                  f"{', '.join(t['name'] for t in terms)}")
+
+    for term_info in terms:
+        code = term_info["code"]
+        name = term_info["name"]
+        expected = term_info["count"]
+        reporter.crawl_courses_start(name)
+        t0 = time.time()
+        try:
+            _check_session(client)
+            rows = client.list_semester_courses(code)
+            if not rows:
+                reporter.info(f"  Term {name}: API returned 0 courses, skipping.")
+                continue
+            # Pass the human-readable term name (not the API code) to the
+            # DB so the frontend displays "2025-20262" instead of "25".
+            deleted, upserted = db.upsert_all_courses_for_term(name, rows)
+            reporter.crawl_courses_done(
+                name, len(rows), deleted, upserted, time.time() - t0,
+            )
+        except Exception as e:
+            reporter.crawl_courses_failed(name, e)
+        reporter.info(f"  ({code}) → {expected} API courses, "
+                      f"{len(rows)} fetched")
+
+    reporter.info("Semester catalog crawl complete.")
 
 
 def run():
@@ -239,10 +265,10 @@ def run():
 
     if not config.COURSE_IDS and not config.CRAWL_TERM:
         reporter.info(
-            "No COURSE_IDS configured and no CRAWL_TERM set. Set at least "
-            "one of these env vars."
+            "No COURSE_IDS configured. Set COURSE_IDS to process lectures "
+            "or leave empty for crawl-only mode."
         )
-        return
+        # Fall through — crawl-only mode is valid.
 
     db = Database()
     transcriber = Transcriber()
@@ -255,9 +281,9 @@ def run():
     client = ICourseClient(vpn)
     email_items: list = []
 
-    # Crawl the catalog first so the all_courses table is fresh for the
-    # frontend even if the per-lecture loop fails later.
-    _crawl_semester_catalog(client, db, reporter, config.CRAWL_TERM)
+    # Auto-discover and crawl every available semester.  The frontend
+    # subscription editor depends on a fresh all_courses table.
+    _crawl_semester_catalog(client, db, reporter)
 
     if not config.COURSE_IDS:
         # Crawl-only mode: nothing to process, just persist + exit.

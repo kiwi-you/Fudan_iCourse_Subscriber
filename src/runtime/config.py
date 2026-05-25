@@ -179,7 +179,7 @@ COURSE_IDS = [
     if c.strip()
 ]
 
-# 学期级课程目录爬取。设置后，每次运行会把该学期的全部课程刷入 all_courses
-# 表，供前端订阅编辑器搜索/可视化选择。未设置 → 跳过爬取（默认行为）。
+# 学期级课程目录爬取（已弃用 — main.py 现在自动发现所有学期）。
+# 保留此变量仅用于兼容老部署环境，新部署无需设置。
 # 例：CRAWL_TERM=25
 CRAWL_TERM = os.environ.get("CRAWL_TERM", "").strip()

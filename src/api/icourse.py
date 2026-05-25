@@ -238,9 +238,34 @@ class ICourseClient:
             "courses": result.get("list", []),
         }
 
+    def discover_terms(self, code_min: int = 10,
+                       code_max: int = 30) -> list[dict]:
+        """Scan term codes to discover all available semesters.
+
+        Returns ``[{code, name, count}]`` sorted by code descending
+        (newest first).  Only codes returning >0 courses are included.
+        """
+        results: list[dict] = []
+        for code in range(code_min, code_max + 1):
+            try:
+                resp = self.get_course_list(
+                    term=str(code), page=1, per_page=1,
+                )
+                total = resp.get("total", 0)
+                if not total:
+                    continue
+                courses = resp.get("courses", [])
+                name = (courses[0].get("term_name") or str(code)
+                        if courses else str(code))
+                results.append({"code": str(code), "name": name,
+                                "count": total})
+            except Exception:
+                continue
+        return sorted(results, key=lambda x: -int(x["code"]))
+
     def list_semester_courses(self, term: str,
                               per_page: int = 100,
-                              max_pages: int = 50) -> list[dict]:
+                              max_pages: int = 60) -> list[dict]:
         """Walk every page of get-course-list for ``term``.
 
         Returns a flat list of ``{course_id, title, teacher, dept}`` dicts,
