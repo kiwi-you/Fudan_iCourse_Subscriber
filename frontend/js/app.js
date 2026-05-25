@@ -849,13 +849,13 @@ document.addEventListener("alpine:init", () => {
       this.singleRunTriggering = true;
       this.subsError = "";
       try {
-        // Temporarily set COURSE_IDS to the single-run list, trigger,
-        // then restore.  This avoids a separate workflow input.
-        await ICS.github.setCourseIdsSecret(
-          this.repoOwner, this.repoName, creds.token, this.singleRunIds,
-        );
-        await ICS.github.triggerCheckWorkflow(
+        // Fire single_run.yml directly with course_ids as input. This
+        // keeps the persisted COURSE_IDS secret (used by daily check)
+        // untouched, and uses the dedicated single-run workflow rather
+        // than overloading the scheduled check workflow.
+        await ICS.github.triggerSingleRunWorkflow(
           this.repoOwner, this.repoName, "main", creds.token,
+          this.singleRunIds,
         );
         this._toast(
           "已触发单次运行，处理 " + this.singleRunIds.length + " 门课。请到 Actions 查看进度",

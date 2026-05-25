@@ -266,6 +266,41 @@ async function _setCourseIdsSecret(owner, repo, token, courseIds) {
   return value;
 }
 
+async function _triggerSingleRunWorkflow(owner, repo, ref, token, courseIds) {
+  // Fires the Single Run workflow (single_run.yml) via workflow_dispatch.
+  // The workflow takes a ``course_ids`` input (comma-separated list) and
+  // processes ONLY those courses without touching the persisted
+  // ``COURSE_IDS`` secret used by the daily check workflow.
+  // PAT needs ``Actions: Read and write``.
+  const url = `${_GH_API}/repos/${owner}/${repo}/actions/workflows/single_run.yml/dispatches`;
+  const ids = (Array.isArray(courseIds) ? courseIds : [])
+    .map(String).map((s) => s.trim()).filter(Boolean).join(",");
+  if (!ids) throw new Error("单次运行列表为空");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ..._ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ref: ref || "main",
+      inputs: { course_ids: ids },
+    }),
+  });
+  if (res.status === 204) return;
+  const body = await res.text();
+  if (res.status === 403 || res.status === 404) {
+    throw new Error(
+      "无法触发 single_run workflow。请确认 PAT 已开启 Actions: Read and write " +
+      `权限，且 single_run.yml 存在于 ref '${ref || "main"}'。服务端返回：${res.status} ${body}`
+    );
+  }
+  if (res.status === 422) {
+    throw new Error(
+      "触发失败 (422)：通常是 inputs 不匹配 workflow 定义，或 single_run.yml " +
+      `不存在于指定分支 '${ref || "main"}'。服务端返回：${body}`
+    );
+  }
+  throw new Error(`GitHub API error ${res.status}: ${body}`);
+}
+
 async function _triggerCheckWorkflow(owner, repo, ref, token) {
   // Fires the iCourse Check workflow (check.yml) via workflow_dispatch.
   // The workflow uses ``secrets.COURSE_IDS`` directly — no inputs needed.
@@ -342,6 +377,7 @@ window.ICS.github = {
   fetchShardManifest: _fetchShardManifest,
   triggerExportWorkflow: _triggerExportWorkflow,
   triggerCheckWorkflow: _triggerCheckWorkflow,
+  triggerSingleRunWorkflow: _triggerSingleRunWorkflow,
   getRepoPublicKey: _getRepoPublicKey,
   putRepoSecret: _putRepoSecret,
   setCourseIdsSecret: _setCourseIdsSecret,
