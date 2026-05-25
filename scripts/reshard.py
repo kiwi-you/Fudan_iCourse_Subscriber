@@ -194,9 +194,7 @@ def main():
         sqlite_path = os.path.join(output_dir, f"shard-{idx+1:04d}.db")
         enc_path = os.path.join(output_dir, SHARDS_DIR, shard_name)
 
-        _build_shard_db(
-            source_db, group, sqlite_path, include_catalog=(idx == 0),
-        )
+        _build_shard_db(source_db, group, sqlite_path)
         content_hash = _gzip_and_encrypt(sqlite_path, enc_path, password)
         os.unlink(sqlite_path)
 

@@ -59,6 +59,20 @@ class Database:
                         f"ALTER TABLE ppt_pages ADD COLUMN {col} {typedef}"
                     )
 
+    def write_meta(self, key: str, value: str):
+        """Persist a key-value pair (e.g. COURSE_IDS from CI secret)."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+
+    def read_meta(self, key: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,),
+        ).fetchone()
+        return row["value"] if row else None
+
     def upsert_course(self, course_id: str, title: str, teacher: str):
         with self.conn:
             self.conn.execute(

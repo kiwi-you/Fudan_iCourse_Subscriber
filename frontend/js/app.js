@@ -622,9 +622,8 @@ document.addEventListener("alpine:init", () => {
       this.subsSelMiddle = [];
       this.subsSelRight = [];
       this.subsError = "";
-      // Load subscription from localStorage (cached secret state).
-      // No fallback to the ``courses`` table — that table holds every
-      // course ever processed, not the Secret's current COURSE_IDS.
+      // Load subscription: prefer localStorage (fast), fallback to
+      // the meta table (written by CI from the actual GitHub Secret).
       this.subscribedIds = [];
       try {
         var cached = JSON.parse(
@@ -632,6 +631,21 @@ document.addEventListener("alpine:init", () => {
         );
         if (Array.isArray(cached)) this.subscribedIds = cached.map(String);
       } catch {}
+      if (!this.subscribedIds.length) {
+        var metaRaw = ICS.db.getMeta("course_ids");
+        if (metaRaw) {
+          this.subscribedIds = metaRaw.split(",")
+            .map(function (s) { return s.trim(); })
+            .filter(Boolean);
+          // Hydrate localStorage so future loads skip the DB lookup
+          try {
+            localStorage.setItem(
+              _LS + "lastSubscribed",
+              JSON.stringify(this.subscribedIds),
+            );
+          } catch {}
+        }
+      }
       this.rebuildSubsFiltered();
       this.navigate("subscriptions");
     },

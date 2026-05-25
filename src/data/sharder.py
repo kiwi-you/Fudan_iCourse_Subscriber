@@ -39,7 +39,8 @@ SHARD_TARGET_BYTES = 3 * 1024 * 1024   # legacy (ignored, kept for API compat)
 COMPRESSION_RATIO_GUESS = 4           # legacy (ignored, kept for API compat)
 INDEX_FILENAME = "icourse-index.enc"
 SHARDS_DIR = "shards"
-INDEX_VERSION = 2
+INDEX_VERSION = 3
+META_SHARD_NAME = "meta-0000.db.gz.enc"
 
 # ── Stable shard assignment ───────────────────────────────────────────────────
 # Shards are grouped by course count, NOT by byte size, so shard boundaries
@@ -110,14 +111,40 @@ def _group_courses(
     return groups
 
 
-def _build_shard_db(source_db: str, course_ids: list[str], output_path: str,
-                    include_catalog: bool = False):
-    """Materialize a self-contained sqlite shard for the given courses.
+def _build_meta_shard(source_db: str, output_path: str):
+    """Build a tiny metadata-only shard containing ``all_courses`` and
+    ``meta``.  Changes infrequently (catalog: 5th/25th; course list: on
+    save).  The frontend loads this first to know subscribed course IDs
+    without decrypting any course-data shard.
+    """
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    src = sqlite3.connect(source_db)
+    src.row_factory = sqlite3.Row
+    dst = sqlite3.connect(output_path)
+    try:
+        dst.executescript(_SCHEMA_SQL)
+        for table in ("all_courses", "meta"):
+            rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            if not rows:
+                continue
+            cols = list(rows[0].keys())
+            col_str = ", ".join(cols)
+            ph_str = ", ".join("?" * len(cols))
+            dst.executemany(
+                f"INSERT OR REPLACE INTO {table} ({col_str}) "
+                f"VALUES ({ph_str})",
+                [tuple(r[c] for c in cols) for r in rows],
+            )
+        dst.commit()
+    finally:
+        dst.close()
+        src.close()
 
-    ``include_catalog`` should be ``True`` only for the first shard so the
-    ``all_courses`` catalog isn't replicated into every shard — replicating
-    it would cause ALL shard SHAs to change on every catalog refresh,
-    defeating the frontend's content-addressed cache.
+
+def _build_shard_db(source_db: str, course_ids: list[str], output_path: str):
+    """Materialize a self-contained sqlite shard for the given courses.
+    ``all_courses`` and ``meta`` live in the separate meta shard.
     """
     if os.path.exists(output_path):
         os.remove(output_path)
@@ -127,20 +154,6 @@ def _build_shard_db(source_db: str, course_ids: list[str], output_path: str,
     dst = sqlite3.connect(output_path)
     try:
         dst.executescript(_SCHEMA_SQL)
-
-        if include_catalog:
-            catalog_rows = src.execute(
-                "SELECT * FROM all_courses"
-            ).fetchall()
-            if catalog_rows:
-                cols = list(catalog_rows[0].keys())
-                col_str = ", ".join(cols)
-                ph_str = ", ".join("?" * len(cols))
-                dst.executemany(
-                    f"INSERT OR REPLACE INTO all_courses ({col_str}) "
-                    f"VALUES ({ph_str})",
-                    [tuple(r[c] for c in cols) for r in catalog_rows],
-                )
 
         if not course_ids:
             dst.commit()
@@ -206,6 +219,29 @@ def shard_database(
     shards_dir = os.path.join(output_dir, SHARDS_DIR)
     os.makedirs(shards_dir, exist_ok=True)
 
+    # ── Meta shard (all_courses + meta table) ──────────────────────
+    meta_entry = None
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        meta_tmp = tmp.name
+    try:
+        _build_meta_shard(db_path, meta_tmp)
+        with open(meta_tmp, "rb") as f:
+            meta_raw = f.read()
+    finally:
+        os.unlink(meta_tmp)
+    meta_gz = gzip.compress(meta_raw, compresslevel=9, mtime=0)
+    meta_enc = crypto_box.encrypt(meta_gz, password, deterministic=True)
+    meta_sha = hashlib.sha256(meta_enc).hexdigest()
+    meta_path = os.path.join(shards_dir, META_SHARD_NAME)
+    with open(meta_path, "wb") as f:
+        f.write(meta_enc)
+    meta_entry = {
+        "name": META_SHARD_NAME,
+        "sha256": meta_sha,
+        "size": len(meta_enc),
+    }
+
+    # ── Course-data shards ────────────────────────────────────────
     src_conn = sqlite3.connect(db_path)
     try:
         groups = _group_courses(src_conn, target_size)
@@ -220,16 +256,12 @@ def shard_database(
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             tmp_path = tmp.name
         try:
-            _build_shard_db(
-                db_path, course_ids, tmp_path, include_catalog=(i == 1),
-            )
+            _build_shard_db(db_path, course_ids, tmp_path)
             with open(tmp_path, "rb") as f:
                 raw = f.read()
         finally:
             os.unlink(tmp_path)
 
-        # mtime=0 keeps gzip output deterministic (default writes wall-clock
-        # into the header, breaking content-addressed caching downstream).
         gzipped = gzip.compress(raw, compresslevel=9, mtime=0)
         encrypted = crypto_box.encrypt(gzipped, password, deterministic=True)
         sha256 = hashlib.sha256(encrypted).hexdigest()
@@ -243,6 +275,8 @@ def shard_database(
             "size": len(encrypted),
             "course_ids": list(course_ids),
         })
+
+    shard_entries.insert(0, meta_entry)
 
     index = {
         "version": INDEX_VERSION,

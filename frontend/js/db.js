@@ -78,6 +78,7 @@ async function _attachShard(shardBytes) {
     _copyRows(shard, _db, "lectures");
     _copyRows(shard, _db, "ppt_pages");
     _copyRows(shard, _db, "all_courses");
+    _copyRows(shard, _db, "meta");
   } finally {
     shard.close();
   }
@@ -201,6 +202,11 @@ function _getSubscribedCourseIds() {
   return _queryAll("SELECT course_id FROM courses").map((r) => r.course_id);
 }
 
+function _getMeta(key) {
+  var rows = _queryAll("SELECT value FROM meta WHERE key = ?", [key]);
+  return rows.length ? rows[0].value : null;
+}
+
 window.ICS.db = {
   initDB: _initFromBytes,
   initEmpty: _initEmpty,
@@ -214,4 +220,5 @@ window.ICS.db = {
   getAllCourses: _getAllCourses,
   getAllCoursesTerms: _getAllCoursesTerms,
   getSubscribedCourseIds: _getSubscribedCourseIds,
+  getMeta: _getMeta,
 };

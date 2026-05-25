@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS all_courses (
 );
 CREATE INDEX IF NOT EXISTS idx_all_courses_term
     ON all_courses(term);
+-- ``meta`` holds key-value configuration that the frontend needs without
+-- loading the full course-data shards (e.g. currently-subscribed course IDs).
+-- Populated by the CI runner from secrets / runtime state.
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 # Columns added to ``lectures`` after the v1 schema shipped.  Existing DBs
