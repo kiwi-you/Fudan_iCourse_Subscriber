@@ -90,11 +90,54 @@ def _resource_meter(bound: str = "") -> str:
 _JP_NOISE_RE = re.compile(r"[぀-ゟ゠-ヿｦ-ﾟ]+")
 # Korean: precomposed hangul syllables + jamo blocks
 _KR_NOISE_RE = re.compile(r"[가-힯ᄀ-ᇿ㄰-㆏]+")
-# English filler-word whitelist.  Word-bounded so tech terms survive.
-_EN_FILLER_RE = re.compile(
-    r"\b(?:yeah|yep|yup|ok|okay|uh+|um+|hmm+|ohh*|huh+|hey+|"
-    r"you know|i mean)\b",
+# English + Chinese filler / interjection words.  Word-bounded where
+# possible so tech terms ("CNN", "RNN") are never touched.
+#
+#   [\s.。,，;；!！?？]*  — leading punctuation / whitespace (greedy)
+#   \b(…)\b                 — filler word (word-bounded for ASCII)
+#   [\s.。,，;；!！?？、。]+ — trailing punctuation sequence (at least 1)
+#
+# All three are removed together so we don't leave orphan punctuation
+# behind.  For Chinese fillers that can't be word-bounded, we require
+# at least ONE punctuation neighbour.
+#
+# CJK interjections — ONLY pure onomatopoeia / filler sounds, NOT sentence
+# particles ("吗""呢""吧""嘛""呀" are meaningful and must stay).
+_CN_FILLER_WORDS = r"嗯|呃|啊+|哦+|哈+|呵+|唉|哎|哟|嗨|喔+|噢+|啧|嘶|啧|唔+"
+_EN_FILLER_WORDS = (
+    r"yeah|yep|yup|ok|okay|uh+|um+|hmm+|ohh*|huh+|hey+|"
+    r"you know|i mean|"
+    r"the|it|its|that|this|these|those|"
+    r"of|to|for|a|an|be|was|were|do|does|did|"
+    r"just|only|very|really|actually"
+)
+# Pattern: filler word surrounded by punctuation on either side.
+# Requires AT LEAST ONE punctuation neighbour (leading or trailing) so
+# we don't touch fillers embedded in real content.  The entire match
+# (optional leading punct + filler + mandatory trailing punct) is
+# removed, so no orphan punctuation remains.
+_FILLER_PUNCT_RE = re.compile(
+    r"(?:"
+    r"[\s.。,，;；!！?？、。]+"
+    r"\b(?:" + _EN_FILLER_WORDS + r")\b"
+    r"[\s.。,，;；!！?？、。]*"
+    r"|"
+    r"[\s.。,，;；!！?？、。]*"
+    r"\b(?:" + _EN_FILLER_WORDS + r")\b"
+    r"[\s.。,，;；!！?？、。]+"
+    r")",
     re.IGNORECASE,
+)
+_CN_FILLER_PUNCT_RE = re.compile(
+    r"(?:"
+    r"[\s.。,，;；!！?？、。]+"
+    r"(?:" + _CN_FILLER_WORDS + r")"
+    r"[\s.。,，;；!！?？、。]*"
+    r"|"
+    r"[\s.。,，;；!！?？、。]*"
+    r"(?:" + _CN_FILLER_WORDS + r")"
+    r"[\s.。,，;；!！?？、。]+"
+    r")",
 )
 # Angle-bracket tokens emitted as literal text by some backends:
 #   <sil>          FireRed silence
@@ -117,12 +160,19 @@ _EDGE_PUNCT = " \t　.。,，;；!！?？"
 def _postprocess_segment(text: str) -> str:
     """Strip cross-backend ASR noise from one recognized segment."""
     text = _BRACKET_TOK_RE.sub("", text)
+    # Japanese / Korean kana — always noise in Chinese lectures
     text = _JP_NOISE_RE.sub("", text)
     text = _KR_NOISE_RE.sub("", text)
-    text = _EN_FILLER_RE.sub("", text)
+    # Filler words with punctuation neighbours — remove word + punct together
+    text = _FILLER_PUNCT_RE.sub("", text)
+    text = _CN_FILLER_PUNCT_RE.sub("", text)
+    # Clean up what's left
     text = _ORPHAN_PUNCT_RE.sub("。", text)
     text = _WS_COLLAPSE_RE.sub(" ", text)
-    return text.strip(_EDGE_PUNCT)
+    text = text.strip(_EDGE_PUNCT).strip()
+    if text in (".", "。", "？", "。", "!", "；", "，"):
+        return ""
+    return text
 
 
 class Transcriber:
