@@ -623,6 +623,8 @@ document.addEventListener("alpine:init", () => {
       this.subsSelRight = [];
       this.subsError = "";
       // Load subscription from localStorage (cached secret state).
+      // No fallback to the ``courses`` table — that table holds every
+      // course ever processed, not the Secret's current COURSE_IDS.
       this.subscribedIds = [];
       try {
         var cached = JSON.parse(
@@ -630,21 +632,6 @@ document.addEventListener("alpine:init", () => {
         );
         if (Array.isArray(cached)) this.subscribedIds = cached.map(String);
       } catch {}
-      // One-time migration: if the cache is empty, seed it from the courses
-      // table so the user doesn't start with an empty left column.  Save
-      // immediately so future loads read from localStorage without the DB
-      // fallback (the courses table grows over time and isn't the secret).
-      if (!this.subscribedIds.length) {
-        this.subscribedIds = ICS.db.getSubscribedCourseIds().map(String);
-        if (this.subscribedIds.length) {
-          try {
-            localStorage.setItem(
-              _LS + "lastSubscribed",
-              JSON.stringify(this.subscribedIds),
-            );
-          } catch {}
-        }
-      }
       this.rebuildSubsFiltered();
       this.navigate("subscriptions");
     },
